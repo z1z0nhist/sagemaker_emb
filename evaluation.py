@@ -206,14 +206,14 @@ if __name__ == "__main__":
         model = torch.load(f)
     # model = EMB_model(model_name=config['model_name'], target_size=target_size)
     model.to(device)
-
     model.eval()
 
     data_transforms = data_transforms_img(config['img_size'])
 
     Test = aws_EMB_Dataset(valid_df, fs, transforms=data_transforms['valid'])
-    print(valid_df)
     Test_loader = DataLoader(Test, batch_size=2, num_workers=0, shuffle=True, pin_memory=True, drop_last=True)
+
+    logger.info(valid_df)
     # model test
     total = 0
     correct = 0

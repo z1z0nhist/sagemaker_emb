@@ -103,7 +103,7 @@ def run_training(args, model, optimizer, scheduler, device, num_epochs, Train_lo
             logger.info(f"Validation Loss Improved ({best_epoch_loss} ---> {val_epoch_loss})")
             best_epoch_loss = val_epoch_loss
             best_model_wts = copy.deepcopy(model.state_dict())
-            save_model(model, args.model_dir, loss=best_epoch_loss, name=args.model_name)
+            save_model(model, args, loss=best_epoch_loss)
 
         logger.info('\n')
 
@@ -195,7 +195,7 @@ def train(args):
                                                    Train_loader=Train_loader,
                                                    test_loader=test_loader)
 
-    save_model(model, args.model_dir, loss=best_epoch_loss, name=args.model_name)
+    save_model(model, args, loss=best_epoch_loss)
 
 
 def test(model, test_loader, device):
@@ -221,25 +221,25 @@ def test(model, test_loader, device):
         100. * correct / total))
     return {'loss': test_loss, 'acc': correct / total}
 
-
-def save_model(model, model_dir, loss, name):
+def save_model(model, args, loss):
     s3 = boto3.client('s3')
     bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
 
-    path = os.path.join(model_dir, 'model.pth')
+    path = os.path.join(args.model_dir, 'model.pth')
     logger.info("Saving the model." + path)
     torch.save(model, path)
 
-    s3.upload_file(path, bucket_name, f'emb-models/{name}/{loss}-model.pth')
-    logger.info("Saving the model to S3." + bucket_name + '/emb-models' + f'/{name}/{loss}-model.pth')
+    s3.upload_file(path, bucket_name, f'emb-models/{args.model_name}/{loss}-model.pth')
+    logger.info("Saving the model to S3." + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pth')
 
 
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = EMB_model(model_name='convnext_base_384_in22ft1k', target_size=130).to(device)
+    # model = EMB_model(model_name='convnext_base_384_in22ft1k', target_size=130).to(device)
     with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
-        model.load_state_dict(torch.load(f))
-    return model.to(device)
+        model = torch.load(f, map_location=device)
+    model.eval()
+    return model
 
 
 if __name__ == '__main__':
