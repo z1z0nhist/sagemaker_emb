@@ -188,12 +188,13 @@ def train(args):
     optimizer = optim.Adam(model.parameters(), lr=0.0001,
                            weight_decay=1e-6)
     scheduler = fetch_scheduler(optimizer)
-
-    model, best_epoch_loss = run_training(args, model, optimizer, scheduler,
-                                                   device=device,
-                                                   num_epochs=args.epochs,
-                                                   Train_loader=Train_loader,
-                                                   test_loader=test_loader)
+    best_epoch_loss = 1000
+    if args.epochs > 0:
+        model, best_epoch_loss = run_training(args, model, optimizer, scheduler,
+                                                       device=device,
+                                                       num_epochs=args.epochs,
+                                                       Train_loader=Train_loader,
+                                                       test_loader=test_loader)
 
     save_model(model, args, loss=best_epoch_loss)
 
@@ -248,7 +249,7 @@ if __name__ == '__main__':
                         help='input batch size for training (default: 4)')
     parser.add_argument('--test-batch-size', type=int, default=4, metavar='N',
                         help='input batch size for testing (default: 4)')
-    parser.add_argument('--epochs', type=int, default=1, metavar='N',
+    parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: 10)'),
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.001)')
