@@ -227,21 +227,23 @@ def save_model(model, args, loss):
     bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
 
     path = os.path.join(args.model_dir, 'model.pth')
-    logger.info("Saving the model." + path)
+    logger.info("Saving the model. \n" + path)
     torch.save(model, path)
 
     s3.upload_file(path, bucket_name, f'emb-models/{args.model_name}/{loss}-model.pth')
-    logger.info("Saving the model to S3." + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pth')
-
+    logger.info("Saving the model to S3. \n" + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pth')
 
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = EMB_model(model_name='convnext_base_384_in22ft1k', target_size=130).to(device)
+    logger.info("Load Model. \n" + os.path.join(model_dir, 'model.pth'))
+    model = None
     with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
         model = torch.load(f, map_location=device)
     model.eval()
     return model
 
+def predict_fn(input_object, model):
+    return model.predict(input_object)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
