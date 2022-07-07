@@ -47,9 +47,7 @@ config = {
 
 
 class EMB_model(nn.Module):
-    def __init__(self, model_name, target_size, pretrained=False):
-        bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
-
+    def __init__(self, model_name, target_size, pretrained):
         super(EMB_model, self).__init__()
         self.model = timm.create_model(model_name=model_name, pretrained=pretrained, num_classes=target_size)
 
@@ -58,17 +56,17 @@ class EMB_model(nn.Module):
             device = torch.device('cuda')
 
         if not pretrained:
+            bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
             s3 = boto3.resource('s3')
-            conn = boto3.client('s3')
             fs = s3fs.S3FileSystem()
             my_bucket = s3.Bucket(bucket_name)
             heap = []
             for label in my_bucket.objects.filter(Prefix='emb-models'):
-                if label.key.endswith('.pth'):
+                if label.key.endswith('.pt'):
                     heapq.heappush(heap, f's3://' + bucket_name + '/' + label.key)
             logger.info('recent model loss is : ' + heap[0])
             with fs.open(heap[0]) as f:
-                self.model = torch.load(f, map_location=device)
+                self.model = torch.jit.load(f, map_location=device)
 
     def forward(self, x):
         x = self.model(x)
@@ -181,7 +179,7 @@ def train(args):
     target_size = len(encoder.classes_)
     # model
 
-    model = EMB_model(model_name=args.model_name, target_size=target_size).to(device)
+    model = EMB_model(model_name=args.model_name, target_size=target_size, pretrained=args.pretrain).to(device)
 
     logger.info("Model loaded")
 
@@ -226,11 +224,11 @@ def save_model(model, args, loss):
     s3 = boto3.client('s3')
     bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
 
-    path = os.path.join(args.model_dir, 'model.pth')
+    path = os.path.join(args.model_dir, 'model.pt')
     logger.info("Saving the model. \n" + path)
-    torch.save(model, path)
+    torch.save(model.state_dict(), path)
 
-    s3.upload_file(path, bucket_name, f'emb-models/{args.model_name}/{loss}-model.pth')
+    s3.upload_file(path, bucket_name, f'emb-models/{args.model_name}/{loss}-model.pt')
     logger.info("Saving the model to S3. \n" + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pth')
 
 def model_fn(model_dir):
@@ -268,6 +266,8 @@ if __name__ == '__main__':
     parser.add_argument('--img_size', type=int, default=448,
                         help='model train img size')
     parser.add_argument('--sch', type=str, default='CosineAnnealingLR',
+                        help='lr sch arg')
+    parser.add_argument('--pretrain', type=bool, default=True,
                         help='lr sch arg')
 
     # Container environment

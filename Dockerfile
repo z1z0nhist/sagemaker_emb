@@ -15,7 +15,5 @@ RUN pip3 install sagemaker-training
 #COPY train.py /opt/ml/code/train.py
 COPY . /opt/ml/code/
 
-ENV SAGEMAKER_SUBMIT_DIRECTORY /opt/ml/code
-
 # Defines train.py as script entrypoint
-ENV SAGEMAKER_PROGRAM train.py
+ENTRYPOINT ["python", "/opt/ml/code//train.py"]
