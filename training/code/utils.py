@@ -115,15 +115,14 @@ def criterion(outputs, labels):
     return nn.CrossEntropyLoss()(outputs, labels)
 
 
-############# train one epoch ###################################
+############# training one epoch ###################################
 def training_epoch(model, optimizer, scheduler, dataloader, device, epoch):
     model.train()
 
     dataset_size = 0
     running_loss = 0.0
 
-    bar = tqdm(enumerate(dataloader), total=len(dataloader))
-    for step, data in bar:
+    for step, data in enumerate(dataloader):
 
         img = data['image'].to(device, dtype=torch.float)
         labels = data['new_labels'].to(device, dtype=torch.long)
@@ -147,8 +146,6 @@ def training_epoch(model, optimizer, scheduler, dataloader, device, epoch):
 
         epoch_loss = running_loss / dataset_size
 
-        bar.set_postfix(Epoch=epoch, Train_Loss=epoch_loss,
-                        LR=optimizer.param_groups[0]['lr'])
     gc.collect()
     return epoch_loss
 

@@ -1,22 +1,13 @@
 import heapq
 import pathlib
-import pickle
 import tarfile
 
-import pandas as pd
 from tqdm import tqdm
 
-import argparse
-
 import os
-import time
 import cv2
-import gc
-import copy
 import json
 import numpy as np
-
-from collections import defaultdict
 
 from sklearn.preprocessing import LabelEncoder
 
@@ -30,10 +21,9 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.utils.data import Dataset, DataLoader
 
-from training import training_epoch, val_epoch
-from make_csv import aws_make_csv_file
-from Module import EMB_model, EMB_Dataset, aws_EMB_Dataset
+from training.code.utils import aws_EMB_Dataset, aws_make_csv_file
 
+import sys
 import boto3
 import s3fs
 from sagemaker import get_execution_role
@@ -49,14 +39,13 @@ config = {
     "model_name": 'convnext_large_384_in22ft1k',
     "sch": 'CosineAnnealingLR',
     "epoch": 100,
-    "img_size": 384,
+    "img_size": 448,
     "patience": 20
 }
 
-
 def data_transforms_img(img_size):
     data_transforms = {
-        "train": A.Compose([
+        "training": A.Compose([
             # 이미지의 maxsize를 max_size로 rescale합니다. aspect ratio는 유지.
             A.LongestMaxSize(max_size=int(img_size * 1.0)),
             # min_size보다 작으면 pad
@@ -89,42 +78,6 @@ def data_transforms_img(img_size):
             transforms.ToTensorV2()])
     }
     return data_transforms
-
-
-def padding(img, set_size):
-    try:
-        h, w, c = img.shape
-    except:
-        print('파일을 확인후 다시 시작하세요.')
-        raise
-
-    if h < w:
-        new_width = set_size
-        new_height = int(new_width * (h / w))
-    else:
-        new_height = set_size
-        new_width = int(new_height * (w / h))
-
-    if max(h, w) < set_size:
-        img = cv2.resize(img, (new_width, new_height), cv2.INTER_CUBIC)
-    else:
-        img = cv2.resize(img, (new_width, new_height), cv2.INTER_AREA)
-
-    try:
-        h, w, c = img.shape
-    except:
-        print('파일을 확인후 다시 시작하세요.')
-        raise
-
-    delta_w = set_size - w
-    delta_h = set_size - h
-    top, bottom = delta_h // 2, delta_h - (delta_h // 2)
-    left, right = delta_w // 2, delta_w - (delta_w // 2)
-
-    new_img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0, 0, 0])
-
-    return new_img
-
 
 def test_label_encoding(df, encoder):
     df['new_labels'] = 'None'
@@ -168,10 +121,10 @@ if __name__ == "__main__":
     conn = boto3.client('s3')
     fs = s3fs.S3FileSystem()
 
-    train_df = aws_make_csv_file('/train/', conn, bucket, subfolder)
+    train_df = aws_make_csv_file('/training/', conn, bucket, subfolder)
 
-    if os.path.isfile('label.json'):
-        with open('label.json', 'r') as file:
+    if os.path.isfile('training/label.json'):
+        with open('training/label.json', 'r') as file:
             label_name = json.load(file)
         encoder = LabelEncoder()
         if len(list(label_name.keys())) == len(train_df['labels']):
@@ -182,13 +135,13 @@ if __name__ == "__main__":
             encoder = LabelEncoder()
             train_df['new_labels'] = encoder.fit_transform(train_df['labels'])
             target_encodings = {t: i for i, t in enumerate(encoder.classes_)}
-            with open('label.json', 'w') as f:
+            with open('training/label.json', 'w') as f:
                 json.dump(target_encodings, f)
     else:
         encoder = LabelEncoder()
         train_df['new_labels'] = encoder.fit_transform(train_df['labels'])
         target_encodings = {t: i for i, t in enumerate(encoder.classes_)}
-        with open('label.json', 'w') as f:
+        with open('training/label.json', 'w') as f:
             json.dump(target_encodings, f)
 
     encoder = LabelEncoder()
@@ -202,7 +155,7 @@ if __name__ == "__main__":
     with tarfile.open(model_path) as tar:
         tar.extractall(path=".")
 
-    with open(os.path.join(model_path, 'model.pth'), 'rb') as f:
+    with open(os.path.join(model_path, 'model.pt'), 'rb') as f:
         model = torch.load(f)
     # model = EMB_model(model_name=config['model_name'], target_size=target_size)
     model.to(device)

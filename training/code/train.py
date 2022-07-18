@@ -17,7 +17,7 @@ import cv2
 import boto3
 import s3fs
 import json
-
+import shutil
 import sys
 import torch
 import torch.nn as nn
@@ -35,7 +35,7 @@ from utils import EMB_Dataset, data_transforms_img, make_csv_file, test_label_en
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logger.addHandler(logging.StreamHandler(sys.stdout))
+# logger.addHandler(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.getLevelName("INFO"),
     handlers=[logging.StreamHandler(sys.stdout)],
@@ -45,18 +45,20 @@ config = {
     "sch": 'CosineAnnealingLR',
 }
 
+bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
 
 class EMB_model(nn.Module):
     def __init__(self, model_name, target_size, pretrained):
         super(EMB_model, self).__init__()
-        self.model = timm.create_model(model_name=model_name, pretrained=pretrained, num_classes=target_size)
-
         device = torch.device('cpu')
         if torch.cuda.is_available():
             device = torch.device('cuda')
 
-        if not pretrained:
-            bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
+        logger.info(type(pretrained))
+        logger.info(pretrained)
+        if pretrained:
+            self.model = timm.create_model(model_name=model_name, pretrained=pretrained, num_classes=target_size)
+        else:
             s3 = boto3.resource('s3')
             fs = s3fs.S3FileSystem()
             my_bucket = s3.Bucket(bucket_name)
@@ -66,6 +68,7 @@ class EMB_model(nn.Module):
                     heapq.heappush(heap, f's3://' + bucket_name + '/' + label.key)
             logger.info('recent model loss is : ' + heap[0])
             with fs.open(heap[0]) as f:
+                # self.model.load_state_dict(torch.load(f))
                 self.model = torch.jit.load(f, map_location=device)
 
     def forward(self, x):
@@ -98,7 +101,7 @@ def run_training(args, model, optimizer, scheduler, device, num_epochs, Train_lo
                                      epoch=epoch)
 
         if val_epoch_loss <= best_epoch_loss:
-            logger.info(f"Validation Loss Improved ({best_epoch_loss} ---> {val_epoch_loss})")
+            logger.info(f"Validation Loss Improved ({best_epoch_loss} ---> {val_epoch_loss} / train_loss : {train_epoch_loss})")
             best_epoch_loss = val_epoch_loss
             best_model_wts = copy.deepcopy(model.state_dict())
             save_model(model, args, loss=best_epoch_loss)
@@ -119,11 +122,7 @@ def run_training(args, model, optimizer, scheduler, device, num_epochs, Train_lo
 
 def train(args):
     data_transforms = data_transforms_img(args.img_size)
-    # # 파일경로 추적
-    # for (path, dir, files) in os.walk('/opt/ml/'):
-    #    for filename in files:
-    #        if not str(filename).endswith(".jpg", ".JPG"):
-    #            logger.info("%s/%s" % (path, filename))
+
     use_cuda = args.num_gpus > 0
     logger.debug("Number of gpus available - {}".format(args.num_gpus))
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
@@ -139,10 +138,8 @@ def train(args):
     train_path = os.path.join('/opt/ml/input/data/', args.data_dir)
     valid_path = os.path.join('/opt/ml/input/data/', args.test_dir)
 
-    logger.info(train_path + '/')
-    logger.info(args.test_dir + '/')
-
     train_df = make_csv_file(train_path + '/')
+    s3 = boto3.client('s3')
     if os.path.isfile('label.json'):
         with open('label.json', 'r') as file:
             label_name = json.load(file)
@@ -159,19 +156,18 @@ def train(args):
             with open('label.json', 'w') as f:
                 json.dump(target_encodings, f)
     else:
-        logger.info('cant load label.json...')
+        logger.info('Cant load label.json... make new.')
         encoder = LabelEncoder()
         train_df['new_labels'] = encoder.fit_transform(train_df['labels'])
         target_encodings = {t: i for i, t in enumerate(encoder.classes_)}
         with open('label.json', 'w') as f:
             json.dump(target_encodings, f)
-
-    logger.info(train_df)
+    logger.info(os.path.isfile('label.json'))
+    s3.upload_file('label.json', bucket_name, f'emb-models/label.json') # json 학습 레이블 저장
 
     # train_df['new_labels'] = encoder.fit_transform(train_df['labels'])
     valid_df = test_label_encoding(make_csv_file(valid_path + '/'), encoder)
 
-    logger.info(valid_df)
     Train = EMB_Dataset(train_df, transforms=data_transforms['train'])
     Test = EMB_Dataset(valid_df, transforms=data_transforms['valid'])
     Train_loader = DataLoader(Train, args.batch_size, shuffle=True)
@@ -203,9 +199,8 @@ def test(model, test_loader, device):
     test_loss = 0
     correct = 0
     total = 0
-    bar = tqdm(enumerate(test_loader), total=len(test_loader))
     with torch.no_grad():
-        for step, data in bar:
+        for step, data in enumerate(test_loader):
             img, labels = data['image'].to(device, dtype=torch.float), data['new_labels'].to(device, dtype=torch.long)
             output = model(img)
             loss = criterion(output, labels)
@@ -222,25 +217,33 @@ def test(model, test_loader, device):
 
 def save_model(model, args, loss):
     s3 = boto3.client('s3')
-    bucket_name = 'sagemaker-project-p-pggiw8qb44oo'
 
     path = os.path.join(args.model_dir, 'model.pt')
     logger.info("Saving the model. \n" + path)
-    torch.save(model.state_dict(), path)
+
+    # torch.save(model.state_dict(), path)
+
+    model_scripted = torch.jit.script(model)  # Export to TorchScript
+    model_scripted.save(path)  # Save
 
     s3.upload_file(path, bucket_name, f'emb-models/{args.model_name}/{loss}-model.pt')
-    logger.info("Saving the model to S3. \n" + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pth')
+    logger.info("Saving the model to S3. \n" + bucket_name + '/emb-models' + f'/{args.model_name}/{loss}-model.pt')
 
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Load Model. \n" + os.path.join(model_dir, 'model.pth'))
+    logger.info("Load Model. \n" + os.path.join(model_dir, 'model.pt'))
     model = None
-    with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
-        model = torch.load(f, map_location=device)
+    try:
+        with open(os.path.join(model_dir, 'model.pt'), 'rb') as f:
+            model = torch.jit.load(f, map_location=device)
+    except:
+        model = EMB_model(model_name='convnext_base_384_in22ft1k', pretrained=False, target_size=130)
+        model.load_state_dict(torch.load(f))
     model.eval()
     return model
 
 def predict_fn(input_object, model):
+    logger.info(type(input_object))
     return model.predict(input_object)
 
 if __name__ == '__main__':
@@ -267,7 +270,7 @@ if __name__ == '__main__':
                         help='model train img size')
     parser.add_argument('--sch', type=str, default='CosineAnnealingLR',
                         help='lr sch arg')
-    parser.add_argument('--pretrain', type=bool, default=True,
+    parser.add_argument('--pretrain', type=bool, default=False,
                         help='lr sch arg')
 
     # Container environment
@@ -280,5 +283,25 @@ if __name__ == '__main__':
     parser.add_argument("--test_dir", type=str, default=os.environ.get("SM_CHANNEL_TESTING"))
     parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
 
+
+    # 파일경로 추적
+    logger.info("\n파일경로 확인...\n")
+    for (path, dir, files) in os.walk('/opt/ml/'):
+        if '170' in path:
+            continue
+        logger.info("%s/" % (path))
+        for filename in files:
+            logger.info("|-- %s/%s" % (path, filename))
+
+
     train(parser.parse_args())
 
+    os.mkdir(os.path.join(parser.parse_args().model_dir, 'code'))
+    shutil.copyfile('inference.py', os.path.join(parser.parse_args().model_dir, 'code', 'inference.py'))
+    shutil.copyfile('requirements.txt', os.path.join(parser.parse_args().model_dir, 'code', 'requirements.txt'))
+
+    logger.info("\n결과 파일 경로 확인...\n")
+    for (path, dir, files) in os.walk(parser.parse_args().model_dir):
+        logger.info("%s/" % (path))
+        for filename in files:
+            logger.info("|-- %s/%s" % (path, filename))
